@@ -619,7 +619,9 @@ function newRoomId() {
 }
 function roomFromHash() {
   const h = location.hash.replace(/^#/, '');
-  const m = h.match(/(?:^|&)r=([a-z0-9]{3,16})/i);
+  // 严格匹配：房间号由 32 字符表生成，只含小写字母与数字。
+  // 不加边界的话，'#r=live-a1' 会被截成 'live'，静默进错房间。
+  const m = h.match(/(?:^|&)r=([a-z0-9]{3,16})(?:&|$)/i);
   return m ? m[1].toLowerCase() : null;
 }
 function randomName() {
