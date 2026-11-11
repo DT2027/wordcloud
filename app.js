@@ -34,7 +34,13 @@ const toast = document.getElementById('toast');
 
 const ctx = canvas.getContext('2d');
 const FONT = '"PingFang SC","Microsoft YaHei","Hiragino Sans GB",system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif';
-const DICT = new Set((window.WORDLIST || '').split(/\s+/).filter(Boolean));
+
+// 词表较大（~400KB），异步加载，不阻塞首屏；加载完成后若有文本则重新分词
+let DICT = new Set();
+import('./dict.js').then((m) => {
+  DICT = new Set(String(m.WORDLIST || '').split(/\s+/).filter(Boolean));
+  if (input.value && input.value.trim()) update();
+}).catch(() => { /* 词表缺失时退化为纯统计分词 */ });
 
 let items = [], hitList = [], timer = null;
 let collab = null, composing = false;
@@ -81,10 +87,13 @@ function extractWords(text) {
       for (let len = 2; len <= MAXLEN && i + len <= run.length; len++) {
         const s = run.substr(i, len);
         let e = table.get(s);
-        if (!e) { e = { w: s, c: 0, len, left: new Set(), right: new Set(), pos: [] }; table.set(s, e); }
+        if (!e) {
+          e = { w: s, c: 0, len, left: new Set(), right: new Set(), edgeL: false, edgeR: false, pos: [] };
+          table.set(s, e);
+        }
         e.c++;
-        if (i > 0) e.left.add(run.charAt(i - 1));
-        if (i + len < run.length) e.right.add(run.charAt(i + len));
+        if (i > 0) e.left.add(run.charAt(i - 1)); else e.edgeL = true;      // 句首也是一种独立语境
+        if (i + len < run.length) e.right.add(run.charAt(i + len)); else e.edgeR = true;
         if (e.pos.length < 80) e.pos.push(offset + i);
       }
     }
@@ -92,7 +101,10 @@ function extractWords(text) {
   });
   if (!total && !en.size) return [];
 
-  const cands = [];
+  const thr = total < 400 ? 1.9 : 2.1;
+
+  // ---- 第一步：打分（内聚度 PMI × 上下文自由度 × 长度 × 词典优先）----
+  const all = [];
   table.forEach((e) => {
     if (STOP_SET.has(e.w)) return;
     if (NUM_ONLY.test(e.w)) return;
@@ -107,15 +119,49 @@ function extractWords(text) {
       if (pmi < minPmi) minPmi = pmi;
     }
     if (minPmi === -Infinity) return;
-    const freedom = e.left.size * e.right.size;
-    const thr = total < 400 ? 1.9 : 2.1;
-    const isDict = DICT.has(e.w);
-    const ok = (e.c >= 2 && minPmi >= thr)
-      || (isDict && e.c >= 1 && minPmi >= 0.8)
-      || (e.c === 1 && e.len >= 3 && freedom >= 4 && minPmi >= 2.5);
-    if (!ok) return;
-    e.score = e.c * (1 + Math.min(minPmi, 6) / 2) * (1 + 0.5 * Math.log(1 + freedom)) * (1 + 0.12 * (e.len - 2));
-    cands.push(e);
+    const leftN = e.left.size + (e.edgeL ? 1 : 0);
+    const rightN = e.right.size + (e.edgeR ? 1 : 0);
+    e.freedom = leftN * rightN;                 // 左右语境种类数，越大越像独立词
+    e.pmi = minPmi;
+    e.isDict = DICT.has(e.w);
+    e.score = e.c
+      * (1 + Math.min(minPmi, 6) / 2)
+      * (1 + 0.5 * Math.log(1 + e.freedom))
+      * (1 + 0.06 * (e.len - 2))                // 长度只作微弱加分，避免长碎片喧宾夺主
+      * (e.isDict ? 1.5 : 1);                   // 词典词优先于统计碎片
+    all.push(e);
+  });
+
+  // ---- 第二步：剔除「总是依附于更长词」的碎片（如 工智 / 大模 / 改变世）----
+  const byWord = new Map(all.map((e) => [e.w, e]));
+  all.forEach((B) => {
+    if (B.len < 3) return;
+    for (let l = 2; l < B.len; l++) {
+      for (const sub of [B.w.slice(0, l), B.w.slice(B.len - l)]) {
+        const A = byWord.get(sub);
+        if (!A || A === B || A.c !== B.c) continue;   // 次数不同 → A 还有独立出现，不能当碎片
+        if (A.isDict && !B.isDict) continue;         // A 是词典词 → 本身就是词，保留
+        A.shielded = true;                           // B 更完整，优先保留 B
+      }
+    }
+  });
+
+  // ---- 第三步：收录规则 ----
+  const cands = [];
+  all.forEach((e) => {
+    if (e.shielded) return;
+    const len = e.len;
+    let ok;
+    if (e.isDict) {
+      ok = e.c >= 1 && e.pmi >= 0.8;                        // 词典词直接收录
+    } else if (e.c >= 2) {
+      if (len === 2) ok = e.pmi >= thr;                      // 双字词：内聚度足够即可
+      else if (len <= 4) ok = e.pmi >= thr && e.freedom >= 2;// 三四字词：还需左右语境多样
+      else ok = e.c >= 2 && e.pmi >= 2.2 && e.freedom >= 2;  // 五字以上：需语境多样，否则视为短语
+    } else {
+      ok = len >= 3 && len <= 4 && e.freedom >= 4 && e.pmi >= 2.5;  // 只出现一次：语境必须足够独立
+    }
+    if (ok) cands.push(e);
   });
 
   function conflict(a, b) {
