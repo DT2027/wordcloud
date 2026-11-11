@@ -1,7 +1,9 @@
 /**
  * app.js —— 实时词云主程序
+ *
  * 单人模式：输入即分词、渲染词云。
- * 协作模式：文本存放在 Yjs 共享文档中，房间成员可同时编辑，词云基于共享内容实时生成。
+ * 协作模式：房间内每人一个独立输入槽位，输入互不干扰、原文互不可见；
+ *           词云基于「所有槽位汇总后的词频」实时生成，并可导出高频词。
  */
 import { Collab } from './collab.js';
 
@@ -31,6 +33,16 @@ const myName = document.getElementById('myName');
 const peerList = document.getElementById('peerList');
 const sharedTag = document.getElementById('sharedTag');
 const toast = document.getElementById('toast');
+const inputLabel = document.getElementById('inputLabel');
+const inputHint = document.getElementById('inputHint');
+const rosterEl = document.getElementById('roster');
+const rosterCount = document.getElementById('rosterCount');
+const tableBody = document.getElementById('wordTableBody');
+const tableCount = document.getElementById('tableCount');
+const btnCopyTable = document.getElementById('btnCopyTable');
+const btnExportCsv = document.getElementById('btnExportCsv');
+const btnExportXls = document.getElementById('btnExportXls');
+const btnExportDetail = document.getElementById('btnExportDetail');
 
 const ctx = canvas.getContext('2d');
 const FONT = '"PingFang SC","Microsoft YaHei","Hiragino Sans GB",system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif';
@@ -44,6 +56,10 @@ import('./dict.js').then((m) => {
 
 let items = [], hitList = [], timer = null;
 let collab = null, composing = false;
+let myClientId = '';
+let aggItems = [];        // 汇总词条：{w, c, total, people, names}
+let aggPeople = [];       // 每人重点词
+let onlineIds = new Set();
 
 const SAMPLE = '人工智能正在改变世界。自然语言处理让机器能够理解人类的语言，' +
   '大模型通过海量文本训练获得语言能力。神经网络是深度学习的核心，卷积神经网络擅长图像识别，' +
@@ -108,7 +124,7 @@ function extractWords(text) {
   table.forEach((e) => {
     if (STOP_SET.has(e.w)) return;
     if (NUM_ONLY.test(e.w)) return;
-    if (EDGE_BAD.has(e.w.charAt(0)) || EDGE_BAD.has(e.w.charAt(e.w.length - 1))) return;
+    if (EDGE_BAD.has(e.w.charAt(0)) || EDGE_BAD.has(e.w.charAt(e.len - 1))) return;
     let minPmi = Infinity;
     for (let i = 1; i < e.len; i++) {
       const l = e.w.slice(0, i), r = e.w.slice(i);
@@ -132,24 +148,9 @@ function extractWords(text) {
     all.push(e);
   });
 
-  // ---- 第二步：剔除「总是依附于更长词」的碎片（如 工智 / 大模 / 改变世）----
-  const byWord = new Map(all.map((e) => [e.w, e]));
-  all.forEach((B) => {
-    if (B.len < 3) return;
-    for (let l = 2; l < B.len; l++) {
-      for (const sub of [B.w.slice(0, l), B.w.slice(B.len - l)]) {
-        const A = byWord.get(sub);
-        if (!A || A === B || A.c !== B.c) continue;   // 次数不同 → A 还有独立出现，不能当碎片
-        if (A.isDict && !B.isDict) continue;         // A 是词典词 → 本身就是词，保留
-        A.shielded = true;                           // B 更完整，优先保留 B
-      }
-    }
-  });
-
-  // ---- 第三步：收录规则 ----
+  // ---- 第二步：收录规则 ----
   const cands = [];
   all.forEach((e) => {
-    if (e.shielded) return;
     const len = e.len;
     let ok;
     if (e.isDict) {
@@ -162,6 +163,26 @@ function extractWords(text) {
       ok = len >= 3 && len <= 4 && e.freedom >= 4 && e.pmi >= 2.5;  // 只出现一次：语境必须足够独立
     }
     if (ok) cands.push(e);
+  });
+
+  // ---- 第三步：剔除「总是依附于更长词」的碎片（如 工智 / 大模 / 改变世 / 然语）----
+  // 次数相同 → 短的那个从未独立出现过，是长词的碎片。
+  // 但「词典词豁免」要留一道口子：长串自己不够格时（如「天然语言」凑不齐）
+  // 不能反过来把好词「语言」误伤掉；而长串够格时（「知识图谱」）
+  // 则应保留更完整的长词，而不是拆成「知识」「图谱」。
+  const allWord = new Map(all.map((e) => [e.w, e]));
+  const candWord = new Set(cands.map((e) => e.w));
+  const shielded = new Set();
+  all.forEach((B) => {
+    if (B.len < 3) return;
+    for (let l = 2; l < B.len; l++) {
+      for (const sub of [B.w.slice(0, l), B.w.slice(B.len - l)]) {
+        const A = allWord.get(sub);
+        if (!A || A === B || A.c !== B.c) continue;   // 次数不同 → A 还有独立出现，不能当碎片
+        if (!candWord.has(B.w) && A.isDict) continue;  // 长串不够格，别误伤词典词
+        shielded.add(A.w);
+      }
+    }
   });
 
   function conflict(a, b) {
@@ -181,6 +202,7 @@ function extractWords(text) {
   cands.sort((a, b) => b.score - a.score);
   const kept = [];
   cands.forEach((cd) => {
+    if (shielded.has(cd.w)) return;
     for (let i = 0; i < kept.length; i++) if (conflict(cd, kept[i])) return;
     kept.push(cd);
   });
@@ -320,25 +342,271 @@ function render() {
   sShow.textContent = String(hitList.length);
 }
 
+/* ---------------- 汇总：分人分词 → 词频相加 ---------------- */
+const segCache = new Map();     // id → {text, words}
+
+function segFor(id, text) {
+  const hit = segCache.get(id);
+  if (hit && hit.text === text) return hit.words;
+  const words = (text && text.trim()) ? extractWords(text) : [];
+  segCache.set(id, { text, words });
+  return words;
+}
+
+/**
+ * 把每个人的槽位汇总成一张词表。
+ * 权重 = 所有人该词出现次数之和（经典词云口径）。
+ * 同时记录「几个人提到过」和「谁提到过」，供高频词榜与导出使用。
+ */
+function aggregate(parts, names) {
+  const total = new Map();
+  const who = new Map();
+  const per = [];
+
+  for (const p of parts) {
+    const words = segFor(p.id, p.text);
+    const own = new Map();
+    for (const it of words) {
+      total.set(it.w, (total.get(it.w) || 0) + it.c);
+      if (!who.has(it.w)) who.set(it.w, new Set());
+      who.get(it.w).add(p.id);
+      own.set(it.w, (own.get(it.w) || 0) + it.c);
+    }
+    const top = Array.from(own.entries())
+      .map(([w, c]) => ({ w, c }))
+      .sort((a, b) => b.c - a.c || a.w.localeCompare(b.w, 'zh'));
+    per.push({
+      id: p.id,
+      name: names[p.id] || '匿名',
+      chars: (p.text || '').length,
+      count: top.reduce((a, b) => a + b.c, 0),
+      distinct: top.length,
+      top: top.slice(0, 8),
+      full: top
+    });
+  }
+
+  const items = Array.from(total.entries()).map(([w, c]) => {
+    const ids = who.get(w) || new Set();
+    return {
+      w,
+      c,                                     // 权重 = 总次数
+      total: c,
+      people: ids.size,
+      names: Array.from(ids).map((id) => names[id] || '匿名')
+    };
+  });
+  items.sort((a, b) => b.c - a.c || a.w.localeCompare(b.w, 'zh'));
+  return { items, per };
+}
+
 /* ---------------- 更新流程 ---------------- */
+function nowMs() { return (window.performance && performance.now) ? performance.now() : Date.now(); }
+
 function update() {
+  if (collab) updateRoom();
+  else updateSingle();
+}
+
+function updateSingle() {
   const text = input.value || '';
   sChars.textContent = String(text.length);
   if (!text.trim()) {
-    items = []; sWords.textContent = '0'; sTime.textContent = '—';
-    render(); return;
+    items = []; aggItems = [];
+    sWords.textContent = '0'; sTime.textContent = '—';
+    render(); renderTable(); return;
   }
-  const now = () => (window.performance && performance.now) ? performance.now() : Date.now();
-  const t0 = now();
-  items = extractWords(text);
-  items.sort((a, b) => b.c - a.c);
-  const t1 = now();
+  const t0 = nowMs();
+  const list = extractWords(text);
+  list.sort((a, b) => b.c - a.c);
+  const t1 = nowMs();
+  items = list;
+  aggItems = list.map((it) => ({ w: it.w, c: it.c, total: it.c, people: 1, names: ['我'] }));
   sWords.textContent = String(items.length);
   render();
-  const t2 = now();
+  const t2 = nowMs();
   sTime.textContent = '分词 ' + (t1 - t0).toFixed(0) + ' ms · 渲染 ' + (t2 - t1).toFixed(0) + ' ms';
+  renderTable();
 }
+
+function updateRoom() {
+  const parts = collab.getParts();
+  const names = collab.getNames();
+  const t0 = nowMs();
+  const { items: agg, per } = aggregate(parts, names);
+  const t1 = nowMs();
+  items = agg;
+  aggItems = agg;
+  aggPeople = per;
+  const chars = parts.reduce((a, p) => a + (p.text || '').length, 0);
+  sChars.textContent = String(chars);
+  sWords.textContent = String(agg.length);
+  render();
+  const t2 = nowMs();
+  sTime.textContent = parts.length + ' 人贡献 · 分词 ' + (t1 - t0).toFixed(0) + ' ms · 渲染 ' + (t2 - t1).toFixed(0) + ' ms';
+  renderTable();
+  renderRoster();
+}
+
 function schedule() { clearTimeout(timer); timer = setTimeout(update, 250); }
+
+/* ---------------- 贡献者名单 ---------------- */
+function renderRoster() {
+  rosterEl.innerHTML = '';
+  rosterCount.textContent = String(aggPeople.length);
+  if (!aggPeople.length) {
+    const d = document.createElement('div');
+    d.className = 'roster-empty';
+    d.textContent = '还没有人提交内容，把邀请链接发给同伴吧';
+    rosterEl.appendChild(d);
+    return;
+  }
+  const list = aggPeople.slice().sort((a, b) => {
+    const oa = onlineIds.has(a.id) ? 1 : 0, ob = onlineIds.has(b.id) ? 1 : 0;
+    return ob - oa || b.count - a.count;
+  });
+  list.forEach((p) => {
+    const card = document.createElement('div');
+    card.className = 'rcard';
+
+    const top = document.createElement('div');
+    top.className = 'rc-top';
+    const dot = document.createElement('i');
+    dot.className = 'dot ' + (onlineIds.has(p.id) ? 'ok' : 'off');
+    const nm = document.createElement('span');
+    nm.className = 'rc-name' + (p.id === myClientId ? ' rc-me' : '');
+    nm.textContent = p.name + (p.id === myClientId ? '（我）' : '');
+    top.appendChild(dot);
+    top.appendChild(nm);
+
+    const meta = document.createElement('div');
+    meta.className = 'rc-meta';
+    meta.textContent = p.count + ' 次提及 · ' + p.distinct + ' 个词' + (p.chars ? ' · ' + p.chars + ' 字' : '');
+
+    card.appendChild(top);
+    card.appendChild(meta);
+
+    if (p.top.length) {
+      const wrap = document.createElement('div');
+      wrap.className = 'rc-words';
+      p.top.forEach((t) => {
+        const c = document.createElement('span');
+        c.className = 'wchip';
+        c.textContent = t.w + ' ×' + t.c;
+        wrap.appendChild(c);
+      });
+      card.appendChild(wrap);
+    }
+    rosterEl.appendChild(card);
+  });
+}
+
+/* ---------------- 高频词汇榜 ---------------- */
+function renderTable() {
+  tableBody.innerHTML = '';
+  const top = aggItems.slice(0, 100);
+  tableCount.textContent = aggItems.length ? top.length + ' / ' + aggItems.length + ' 个词' : '';
+  top.forEach((it, i) => {
+    const tr = document.createElement('tr');
+    const c1 = document.createElement('td'); c1.className = 'n'; c1.textContent = String(i + 1);
+    const c2 = document.createElement('td'); c2.className = 'w'; c2.textContent = it.w;
+    const c3 = document.createElement('td'); c3.textContent = String(it.total);
+    const c4 = document.createElement('td'); c4.textContent = String(it.people);
+    const c5 = document.createElement('td'); c5.className = 'who'; c5.textContent = it.names.join('、');
+    tr.append(c1, c2, c3, c4, c5);
+    tableBody.appendChild(tr);
+  });
+}
+
+/* ---------------- 导出 ---------------- */
+function csvCell(v) {
+  const s = String(v == null ? '' : v);
+  return /[",\n\r]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
+}
+function xmlEsc(s) {
+  return String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&apos;' }[c]));
+}
+function stamp() {
+  const d = new Date();
+  const p = (n) => String(n).padStart(2, '0');
+  return d.getFullYear() + p(d.getMonth() + 1) + p(d.getDate()) + '-' + p(d.getHours()) + p(d.getMinutes());
+}
+function fileBase() {
+  return collab ? ('词云高频词-房间' + collab.roomId + '-' + stamp()) : ('词云高频词-' + stamp());
+}
+function download(filename, content, mime) {
+  try {
+    const blob = new Blob([content], { type: mime });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    setTimeout(() => { URL.revokeObjectURL(url); a.remove(); }, 500);
+    return true;
+  } catch (e) { return false; }
+}
+function copyText(text) {
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    return navigator.clipboard.writeText(text).then(() => true).catch(() => fallbackCopy(text));
+  }
+  return Promise.resolve(fallbackCopy(text));
+}
+function fallbackCopy(text) {
+  try {
+    const ta = document.createElement('textarea');
+    ta.value = text;
+    ta.style.position = 'fixed';
+    ta.style.opacity = '0';
+    document.body.appendChild(ta);
+    ta.select();
+    const ok = document.execCommand('copy');
+    ta.remove();
+    return ok;
+  } catch (e) { return false; }
+}
+
+function exportCsv() {
+  if (!aggItems.length) { showToast('还没有可导出的词'); return; }
+  const rows = [['序号', '词语', '总次数', '提及人数', '提及者']];
+  aggItems.forEach((it, i) => rows.push([i + 1, it.w, it.total, it.people, it.names.join('、')]));
+  const csv = '\uFEFF' + rows.map((r) => r.map(csvCell).join(',')).join('\r\n');
+  if (download(fileBase() + '.csv', csv, 'text/csv;charset=utf-8')) showToast('已导出 CSV（' + aggItems.length + ' 个词）');
+}
+
+/** SpreadsheetML 2003：单文件 .xls，Excel / WPS 直接打开，无需压缩库 */
+function exportXls() {
+  if (!aggItems.length) { showToast('还没有可导出的词'); return; }
+  const rows = [['序号', '词语', '总次数', '提及人数', '提及者']];
+  aggItems.forEach((it, i) => rows.push([i + 1, it.w, it.total, it.people, it.names.join('、')]));
+  const body = rows.map((r, ri) => '<Row>' + r.map((c) =>
+    '<Cell' + (ri === 0 ? ' ss:StyleID="hdr"' : '') + '><Data ss:Type="String">' + xmlEsc(c) + '</Data></Cell>'
+  ).join('') + '</Row>').join('');
+  const xml = '<?xml version="1.0" encoding="UTF-8"?>\n' +
+    '<Workbook xmlns="urn:schemas-microsoft-com:office:spreadsheet" xmlns:ss="urn:schemas-microsoft-com:office:spreadsheet">' +
+    '<Styles><Style ss:ID="hdr"><Font ss:Bold="1"/><Interior ss:Color="#EEF1FF" ss:Pattern="Solid"/></Style></Styles>' +
+    '<Worksheet ss:Name="高频词汇"><Table>' + body + '</Table></Worksheet>' +
+    '</Workbook>';
+  if (download(fileBase() + '.xls', xml, 'application/vnd.ms-excel;charset=utf-8')) showToast('已导出 Excel');
+}
+
+function exportDetail() {
+  if (!aggPeople.length) { showToast('还没有可导出的内容'); return; }
+  const rows = [['贡献者', '词语', '次数']];
+  aggPeople.forEach((p) => {
+    (p.full || []).forEach((t) => rows.push([p.name, t.w, t.c]));
+  });
+  const csv = '\uFEFF' + rows.map((r) => r.map(csvCell).join(',')).join('\r\n');
+  if (download(fileBase() + '-各人明细.csv', csv, 'text/csv;charset=utf-8')) showToast('已导出各人明细');
+}
+
+function copyTable() {
+  if (!aggItems.length) { showToast('还没有可复制的词'); return; }
+  const lines = [['序号', '词语', '总次数', '提及人数', '提及者'].join('\t')];
+  aggItems.forEach((it, i) => lines.push([i + 1, it.w, it.total, it.people, it.names.join('、')].join('\t')));
+  copyText(lines.join('\n')).then((ok) => showToast(ok ? ('已复制 ' + aggItems.length + ' 个词') : '复制失败，请手动选择表格'));
+}
 
 /* ---------------- 协作 ---------------- */
 const ROOM_ALPHABET = 'abcdefghjkmnpqrstuvwxyz23456789';
@@ -358,6 +626,15 @@ function randomName() {
   const pool = ['路人', '访客', '小可', '阿橘', '青柠', '布丁', '北极熊', '咕咕', '汤圆', '奶糖'];
   return pool[Math.floor(Math.random() * pool.length)] + Math.floor(10 + Math.random() * 90);
 }
+/** 我的稳定标识：刷新后不变，才能认领回自己的输入槽位 */
+function clientId() {
+  let id = localStorage.getItem('wc-cid');
+  if (!id) {
+    id = 'u' + Math.random().toString(36).slice(2, 10) + Date.now().toString(36).slice(-4);
+    localStorage.setItem('wc-cid', id);
+  }
+  return id;
+}
 function showToast(msg) {
   toast.textContent = msg;
   toast.classList.add('show');
@@ -373,24 +650,24 @@ function enterRoom(roomId) {
   btnCollab.textContent = '协作中';
   btnCollab.classList.add('active');
   roomLabel.textContent = roomId;
+  inputLabel.textContent = '我的重点词';
+  inputHint.textContent = '只有你能编辑这里；房间里其他人看到的是汇总后的词云';
   input.value = '';
-  input.placeholder = '这是共享文档：输入内容会实时同步给房间里的所有人，词云随之更新…';
+  input.placeholder = '写下你的重点词…（原文只有你自己可见，别人只会看到汇总词云）';
 
   const saved = localStorage.getItem('wc-name');
   myName.value = saved || randomName();
   localStorage.setItem('wc-name', myName.value);
+  myClientId = clientId();
 
   collab = new Collab({
     roomId,
     name: myName.value,
-    onText: (text, origin, sel) => {
-      if (input.value !== text) {
-        input.value = text;
-        if (sel) {
-          const n = text.length;
-          input.setSelectionRange(Math.min(sel.start, n), Math.min(sel.end, n));
-        }
-      }
+    ownId: myClientId,
+    onState: (st) => {
+      const mine = st.parts.find((p) => p.id === st.ownId);
+      const myText = mine ? mine.text : '';
+      if (input.value !== myText) input.value = myText;
       schedule();
     },
     onStatus: (status, detail) => {
@@ -400,13 +677,13 @@ function enterRoom(roomId) {
       else if (status === 'error') setStatus('bad', '连接异常');
     },
     onPeers: (peers) => {
-      const online = peers.filter((p) => p.online);
+      onlineIds = new Set(peers.filter((p) => p.online).map((p) => p.id));
       peerList.innerHTML = '';
       const me = document.createElement('span');
       me.className = 'peer me';
       me.textContent = myName.value + '（我）';
       peerList.appendChild(me);
-      online.forEach((p) => {
+      peers.filter((p) => p.online && p.id !== myClientId).forEach((p) => {
         const s = document.createElement('span');
         s.className = 'peer';
         s.textContent = p.name;
@@ -414,12 +691,13 @@ function enterRoom(roomId) {
       });
       const cnt = document.createElement('span');
       cnt.className = 'peer count';
-      cnt.textContent = online.length + ' 人在线';
+      cnt.textContent = onlineIds.size + ' 人在线';
       peerList.appendChild(cnt);
-    },
-    getSelection: () => ({ start: input.selectionStart || 0, end: input.selectionEnd || 0 })
+      renderRoster();
+    }
   });
   collab.start();
+  update();
 }
 
 function leaveRoom() {
@@ -468,11 +746,7 @@ btnCollab.addEventListener('click', () => {
 });
 btnCopy.addEventListener('click', () => {
   const link = location.origin + location.pathname + '#r=' + (collab ? collab.roomId : '');
-  if (navigator.clipboard && navigator.clipboard.writeText) {
-    navigator.clipboard.writeText(link).then(() => showToast('邀请链接已复制')).catch(() => prompt('复制此链接：', link));
-  } else {
-    prompt('复制此链接：', link);
-  }
+  copyText(link).then((ok) => showToast(ok ? '邀请链接已复制' : '复制失败：' + link));
 });
 btnLeave.addEventListener('click', leaveRoom);
 myName.addEventListener('change', () => {
@@ -481,6 +755,11 @@ myName.addEventListener('change', () => {
   localStorage.setItem('wc-name', v);
   if (collab) collab.setName(v);
 });
+
+btnCopyTable.addEventListener('click', copyTable);
+btnExportCsv.addEventListener('click', exportCsv);
+btnExportXls.addEventListener('click', exportXls);
+btnExportDetail.addEventListener('click', exportDetail);
 
 canvas.addEventListener('mousemove', (e) => {
   const r = canvas.getBoundingClientRect();
@@ -504,13 +783,12 @@ canvas.addEventListener('mouseleave', () => tip.classList.remove('show'));
 canvas.addEventListener('click', () => {
   if (!tip.classList.contains('show')) return;
   const txt = tip.textContent.split(' · ')[0];
-  if (navigator.clipboard && navigator.clipboard.writeText) {
-    navigator.clipboard.writeText(txt).then(() => {
-      const old = tip.textContent;
-      tip.textContent = '已复制：' + txt;
-      setTimeout(() => { tip.textContent = old; }, 1200);
-    }).catch(() => {});
-  }
+  copyText(txt).then((ok) => {
+    if (!ok) return;
+    const old = tip.textContent;
+    tip.textContent = '已复制：' + txt;
+    setTimeout(() => { tip.textContent = old; }, 1200);
+  });
 });
 
 let rt;
@@ -522,6 +800,8 @@ if (room) {
   enterRoom(room);
   setStatus('warn', '连接中…');
 } else {
+  inputLabel.textContent = '我的文本';
+  inputHint.textContent = '输入即实时生成词云';
   input.value = SAMPLE;
   update();
 }
