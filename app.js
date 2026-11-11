@@ -17,7 +17,6 @@ const selPal  = document.getElementById('palette');
 const rng     = document.getElementById('limit');
 const rngVal  = document.getElementById('limitVal');
 const btnGen  = document.getElementById('btnGen');
-const btnSmp  = document.getElementById('btnSmp');
 const btnClr  = document.getElementById('btnClear');
 const sChars  = document.getElementById('sChars');
 const sWords  = document.getElementById('sWords');
@@ -43,6 +42,9 @@ const btnCopyTable = document.getElementById('btnCopyTable');
 const btnExportCsv = document.getElementById('btnExportCsv');
 const btnExportXls = document.getElementById('btnExportXls');
 const btnExportDetail = document.getElementById('btnExportDetail');
+const btnSubmit = document.getElementById('btnSubmit');
+const submitStatus = document.getElementById('submitStatus');
+const submitHint = document.getElementById('submitHint');
 
 const ctx = canvas.getContext('2d');
 const FONT = '"PingFang SC","Microsoft YaHei","Hiragino Sans GB",system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif';
@@ -60,6 +62,10 @@ let myClientId = '';
 let aggItems = [];        // 汇总词条：{w, c, total, people, names}
 let aggPeople = [];       // 每人重点词
 let onlineIds = new Set();
+let submittedText = '';   // 最后一次提交时的文本（用于判断「有修改待提交」）
+let submittedAt = 0;      // 最后一次提交的时间戳
+let draftKey = 'wc-draft-solo';
+let draftTimer = null;
 
 const SAMPLE = '人工智能正在改变世界。自然语言处理让机器能够理解人类的语言，' +
   '大模型通过海量文本训练获得语言能力。神经网络是深度学习的核心，卷积神经网络擅长图像识别，' +
@@ -358,7 +364,7 @@ function segFor(id, text) {
  * 权重 = 所有人该词出现次数之和（经典词云口径）。
  * 同时记录「几个人提到过」和「谁提到过」，供高频词榜与导出使用。
  */
-function aggregate(parts, names) {
+function aggregate(parts, names, subs) {
   const total = new Map();
   const who = new Map();
   const per = [];
@@ -381,6 +387,7 @@ function aggregate(parts, names) {
       chars: (p.text || '').length,
       count: top.reduce((a, b) => a + b.c, 0),
       distinct: top.length,
+      submitted: !!(subs && subs[p.id]),
       top: top.slice(0, 8),
       full: top
     });
@@ -432,8 +439,9 @@ function updateSingle() {
 function updateRoom() {
   const parts = collab.getParts();
   const names = collab.getNames();
+  const subs = collab.getSubs();
   const t0 = nowMs();
-  const { items: agg, per } = aggregate(parts, names);
+  const { items: agg, per } = aggregate(parts, names, subs);
   const t1 = nowMs();
   items = agg;
   aggItems = agg;
@@ -449,6 +457,64 @@ function updateRoom() {
 }
 
 function schedule() { clearTimeout(timer); timer = setTimeout(update, 250); }
+
+/* ---------------- 提交 / 本地草稿 ----------------
+ * 提交 = 一次明确的定稿动作：
+ *   协作模式 → 把我的输入固化成房间快照（retained 全量状态），
+ *              别人和后加入的人一定看得到；同时在贡献者名单上标记「已提交」
+ *   单人模式 → 写入本机存储，刷新或关掉页面再回来会自动恢复
+ * 提交之后文本依然可以继续编辑，改完再提交一次即可更新快照。
+ * 另外后台始终在静默保存一份本机草稿，退出房间时也会自动提交一次，
+ * 所以内容不会因为忘记点提交而丢失。
+ */
+function saveDraft(text) {
+  try { localStorage.setItem(draftKey, JSON.stringify({ text: text, ts: Date.now() })); } catch (e) { /* ignore */ }
+}
+function loadDraft() {
+  try {
+    const raw = localStorage.getItem(draftKey);
+    if (!raw) return null;
+    const o = JSON.parse(raw);
+    return (o && typeof o.text === 'string') ? o : null;
+  } catch (e) { return null; }
+}
+function clearDraft() { try { localStorage.removeItem(draftKey); } catch (e) { /* ignore */ } }
+function scheduleDraftSave() {
+  clearTimeout(draftTimer);
+  draftTimer = setTimeout(() => saveDraft(input.value || ''), 400);
+}
+
+function submitNow(silent) {
+  const text = input.value || '';
+  saveDraft(text);
+  submittedText = text;
+  submittedAt = Date.now();
+  if (collab) collab.submit();
+  renderSubmitStatus();
+  if (!silent) showToast(collab ? '已提交到房间，之后仍可继续编辑' : '已保存到本机，之后仍可继续编辑');
+}
+
+function renderSubmitStatus() {
+  if (!btnSubmit) return;
+  const text = input.value || '';
+  const dirty = text !== submittedText;
+  btnSubmit.textContent = collab ? '提交到房间' : '保存到本机';
+  if (submittedText !== '' && !dirty) {
+    const d = new Date(submittedAt);
+    const p = (n) => String(n).padStart(2, '0');
+    submitStatus.textContent = (collab ? '已提交' : '已保存') + ' · ' + p(d.getHours()) + ':' + p(d.getMinutes());
+    submitStatus.className = 'submit-status ok';
+  } else if (submittedText !== '' && dirty) {
+    submitStatus.textContent = collab ? '有修改待提交' : '有修改未保存';
+    submitStatus.className = 'submit-status warn';
+  } else {
+    submitStatus.textContent = collab ? '未提交' : '未保存';
+    submitStatus.className = 'submit-status';
+  }
+  submitHint.textContent = collab
+    ? '提交会把你的输入固化成房间快照，别人和后加入的人一定看得到；提交后仍可继续编辑，改完再提交一次即可。内容同时在后台自动存一份草稿，退出房间时也会自动提交一次。'
+    : '保存后仍可继续编辑。内容同时在后台自动存一份草稿，关掉页面再回来会自动恢复。';
+}
 
 /* ---------------- 贡献者名单 ---------------- */
 function renderRoster() {
@@ -478,6 +544,12 @@ function renderRoster() {
     nm.textContent = p.name + (p.id === myClientId ? '（我）' : '');
     top.appendChild(dot);
     top.appendChild(nm);
+    if (p.submitted) {
+      const badge = document.createElement('span');
+      badge.className = 'rc-sub';
+      badge.textContent = '已提交';
+      top.appendChild(badge);
+    }
 
     const meta = document.createElement('div');
     meta.className = 'rc-meta';
@@ -646,7 +718,7 @@ function setStatus(kind, text) {
   collabStatus.innerHTML = '<i class="dot ' + kind + '"></i>' + text;
 }
 
-function enterRoom(roomId) {
+function enterRoom(roomId, viaLink) {
   collabPanel.hidden = false;
   sharedTag.hidden = false;
   btnCollab.textContent = '协作中';
@@ -656,6 +728,11 @@ function enterRoom(roomId) {
   inputHint.textContent = '只有你能编辑这里；房间里其他人看到的是汇总后的词云';
   input.value = '';
   input.placeholder = '写下你的重点词…（原文只有你自己可见，别人只会看到汇总词云）';
+
+  draftKey = 'wc-draft-' + roomId;
+  submittedText = '';
+  submittedAt = 0;
+  let draftChecked = false;
 
   const saved = localStorage.getItem('wc-name');
   myName.value = saved || randomName();
@@ -669,7 +746,26 @@ function enterRoom(roomId) {
     onState: (st) => {
       const mine = st.parts.find((p) => p.id === st.ownId);
       const myText = mine ? mine.text : '';
+      // 认领到自己的槽位后，若房间里的内容是空的而本机有草稿 → 用草稿补回
+      if (!draftChecked && mine && myText === '') {
+        draftChecked = true;
+        const d = loadDraft();
+        if (d && d.text) {
+          collab.setLocalText(d.text);
+          submittedText = d.text;
+          submittedAt = d.ts || Date.now();
+          renderSubmitStatus();
+          schedule();
+          return;
+        }
+      }
       if (input.value !== myText) input.value = myText;
+      // 房间里的「已提交」标记是权威的：重进房间时把上次的提交状态恢复回来
+      if (st.subs && st.subs[myClientId] && submittedAt !== st.subs[myClientId]) {
+        submittedAt = st.subs[myClientId];
+        submittedText = myText;
+        renderSubmitStatus();
+      }
       schedule();
     },
     onStatus: (status, detail) => {
@@ -700,40 +796,47 @@ function enterRoom(roomId) {
   });
   collab.start();
   update();
+  renderSubmitStatus();
+  if (viaLink) showToast('已进入房间 ' + roomId + '，写下你的重点词吧');
 }
 
 function leaveRoom() {
+  // 退出前把内容定稿一次，避免最后一笔没落进快照
+  if (collab && input.value !== submittedText) {
+    submitNow(true);
+    showToast('退出前已自动提交');
+  }
   location.hash = '';
   location.reload();
 }
 
 /* ---------------- 交互 ---------------- */
-input.addEventListener('input', () => {
-  if (collab) { if (!composing) collab.setLocalText(input.value); }
-  else schedule();
-});
+function onInputChange() {
+  scheduleDraftSave();
+  renderSubmitStatus();
+  if (collab) {
+    if (!composing) { collab.setLocalText(input.value); collab.markDirty(); }
+  } else {
+    schedule();
+  }
+}
+input.addEventListener('input', onInputChange);
 input.addEventListener('compositionstart', () => { composing = true; });
 input.addEventListener('compositionend', () => {
   composing = false;
-  if (collab) collab.setLocalText(input.value);
-  else schedule();
+  onInputChange();
 });
 
 btnGen.addEventListener('click', () => { clearTimeout(timer); update(); });
-btnSmp.addEventListener('click', () => {
-  if (collab) {
-    const cur = input.value;
-    collab.setLocalText(cur ? cur + '\n' + SAMPLE : SAMPLE);
-  } else {
-    input.value = SAMPLE;
-  }
-  clearTimeout(timer); update();
-  input.blur();
-});
+btnSubmit.addEventListener('click', () => submitNow(false));
 btnClr.addEventListener('click', () => {
   if (collab) collab.setLocalText('');
   else input.value = '';
+  clearDraft();          // 主动清空 = 明确丢弃草稿
+  submittedText = '';
+  submittedAt = 0;
   clearTimeout(timer); update();
+  renderSubmitStatus();
   input.focus();
 });
 selPal.addEventListener('change', render);
@@ -799,11 +902,21 @@ window.addEventListener('resize', () => { clearTimeout(rt); rt = setTimeout(rend
 /* ---------------- 启动 ---------------- */
 const room = roomFromHash();
 if (room) {
-  enterRoom(room);
+  // 通过邀请链接直接进房：读到房间号即进入，无需再点一次「开启协作」
+  enterRoom(room, true);
   setStatus('warn', '连接中…');
 } else {
   inputLabel.textContent = '我的文本';
   inputHint.textContent = '输入即实时生成词云';
-  input.value = SAMPLE;
+  draftKey = 'wc-draft-solo';
+  const d = loadDraft();
+  if (d && d.text) {
+    input.value = d.text;
+    submittedText = d.text;
+    submittedAt = d.ts || Date.now();
+  } else {
+    input.value = SAMPLE;
+  }
+  renderSubmitStatus();
   update();
 }

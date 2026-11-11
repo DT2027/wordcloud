@@ -8,6 +8,7 @@
  * 数据模型（Yjs CRDT）：
  *   doc.getMap('parts')   贡献者 id → Y.Text   每人一个槽位，并发写互不冲突
  *   doc.getMap('people')  贡献者 id → 昵称     持久化，离线成员也保留名字
+ *   doc.getMap('subs')    贡献者 id → 提交时间戳  标记「这份内容已定稿」
  *
  * 认领槽位：
  *   首次连上后先等一个同步窗口（等远端 retained 状态到达），
@@ -31,8 +32,8 @@ const DEFAULT_BROKERS = [
   'wss://test.mosquitto.org:8081/mqtt'
 ];
 
-/** 认领槽位前的同步等待窗口（毫秒） */
-const BIND_DELAY = 2200;
+/** 认领槽位前的同步等待窗口（毫秒）：兜底用（房间一直没人时不至于卡住） */
+const BIND_DELAY = 3000;
 
 export class Collab {
   /**
@@ -41,7 +42,7 @@ export class Collab {
    * @param {string} opts.name              我的昵称
    * @param {string} [opts.ownId]           我的稳定标识（刷新后不变，用于认领同一个槽位）
    * @param {string[]} [opts.brokers]
-   * @param {(state:{parts:Array<{id:string,text:string}>,names:Object,ownId:string})=>void} opts.onState
+   * @param {(state:{parts:Array<{id:string,text:string}>,names:Object,subs:Object,ownId:string})=>void} opts.onState
    * @param {(status:string, detail?:string)=>void} opts.onStatus
    * @param {(peers:Array<{id:string,name:string,online:boolean}>)=>void} opts.onPeers
    */
@@ -54,6 +55,7 @@ export class Collab {
     this.doc = new Y.Doc();
     this.parts = this.doc.getMap('parts');    // id → Y.Text
     this.people = this.doc.getMap('people');  // id → 昵称
+    this.subs = this.doc.getMap('subs');      // id → 提交时间戳
     this.peers = new Map();
     this.myText = null;
     this.pending = null;                     // 认领前的输入（null = 尚未输入）
@@ -71,6 +73,7 @@ export class Collab {
 
     this.parts.observeDeep(() => this.emitState());
     this.people.observeDeep(() => this.emitState());
+    this.subs.observeDeep(() => this.emitState());
 
     this.doc.on('update', (update, origin) => {
       if (origin === 'local') {
@@ -87,7 +90,10 @@ export class Collab {
     // 周期性广播完整状态：让后加入者与中途掉线的成员自动追平
     this.syncTimer = setInterval(() => { if (this.client.connected) this.publishState(); }, 15000);
     this.publishPresence();
-    window.addEventListener('beforeunload', () => this.publishPresence(true));
+    window.addEventListener('beforeunload', () => {
+      this.publishPresence(true);
+      this.publishState();   // 离开前落一份完整快照，后加入的人一定看得到
+    });
   }
 
   destroy() {
@@ -171,12 +177,43 @@ export class Collab {
       if (this.pending !== null && this.myText) {
         const p = this.pending;
         this.pending = null;
-        this.writeMine(p);
+        // 槽位里若已有上次留下的内容（刷新后重进房间），保留它并把这次敲的接在后面，
+        // 不要用新输入把旧内容整个覆盖掉。
+        const cur = this.myText.toString();
+        this.writeMine(cur ? cur + '\n' + p : p);
       }
     } catch (e) { /* ignore */ } finally {
       this.suppress = false;
     }
     this.emitState();
+  }
+
+  /* ---------------- 提交 ---------------- */
+  /**
+   * 提交：把当前内容固化成房间快照。
+   * 增量同步是「实时」的，但后加入的人只拿得到 retained 的完整快照，
+   * 所以提交时立刻落一份 —— 这才是「退出后内容不会被意外清空」的保证。
+   */
+  submit() {
+    try {
+      this.doc.transact(() => { this.subs.set(this.ownId, Date.now()); }, 'local');
+    } catch (e) { /* ignore */ }
+    this.publishState();
+  }
+
+  /** 提交后又改了内容 → 撤掉「已定稿」标记 */
+  markDirty() {
+    if (!this.subs.has(this.ownId)) return;
+    try { this.doc.transact(() => { this.subs.delete(this.ownId); }, 'local'); } catch (e) { /* ignore */ }
+  }
+
+  isSubmitted() { return this.subs.has(this.ownId); }
+
+  /** 贡献者 id → 提交时间戳 */
+  getSubs() {
+    const out = {};
+    this.subs.forEach((v, k) => { if (typeof v === 'number') out[k] = v; });
+    return out;
   }
 
   /* ---------------- 内部 ---------------- */
@@ -185,6 +222,7 @@ export class Collab {
     this.opts.onState({
       parts: this.getParts(),
       names: this.getNames(),
+      subs: this.getSubs(),
       ownId: this.ownId
     });
   }
@@ -204,6 +242,9 @@ export class Collab {
     if (topic === this.base + '/doc' || topic === this.base + '/live') {
       if (!payload || !payload.length) return;
       try { this.applyRemote(new TextDecoder().decode(payload)); } catch (e) { /* ignore */ }
+      // 收到远端状态 → 房间不是空的，立刻认领槽位（接管已有的那条），
+      // 别等兜底计时器，免得和远端抢同一个 key 把内容顶掉。
+      if (!this.bound) this.bindMine();
       return;
     }
     if (topic === this.base + '/req') {
