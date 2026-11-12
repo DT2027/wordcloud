@@ -33,8 +33,8 @@
  *     · 最后一人离开 → leave()：先问还有没有人在，没人应答就自动 dissolve()；
  *     · 房间已解散（closed）后不再 publishState()，避免 15 秒周期把房间写回去。
  */
-import * as Y from './vendor/yjs.bundle.mjs?v=20261112a';
-import { MqttClient, bytesToB64, b64ToBytes } from './mqtt-lite.js?v=20261112a';
+import * as Y from './vendor/yjs.bundle.mjs?v=20261112b';
+import { MqttClient, bytesToB64, b64ToBytes } from './mqtt-lite.js?v=20261112b';
 
 const DEFAULT_BROKERS = [
   'wss://broker.emqx.io:8084/mqtt',

@@ -5,11 +5,11 @@
  * 协作模式：房间内每人一个独立输入槽位，输入互不干扰、原文互不可见；
  *           词云基于「所有槽位汇总后的词频」实时生成，并可导出高频词。
  */
-import { Collab } from './collab.js?v=20261112a';
+import { Collab } from './collab.js?v=20261112b';
 
 /* ---------------- DOM ---------------- */
 /** 构建版本号：改动前端后要同步更新（用于缓存刷新 + 页面底部显示） */
-const BUILD = '20261112a';
+const BUILD = '20261112b';
 const buildVer = document.getElementById('buildVer');
 if (buildVer) buildVer.textContent = BUILD;
 
@@ -47,7 +47,6 @@ const tableCount = document.getElementById('tableCount');
 const btnCopyTable = document.getElementById('btnCopyTable');
 const btnExportCsv = document.getElementById('btnExportCsv');
 const btnExportXls = document.getElementById('btnExportXls');
-const btnExportDetail = document.getElementById('btnExportDetail');
 const btnSubmit = document.getElementById('btnSubmit');
 const submitStatus = document.getElementById('submitStatus');
 const submitHint = document.getElementById('submitHint');
@@ -57,7 +56,7 @@ const FONT = '"PingFang SC","Microsoft YaHei","Hiragino Sans GB",system-ui,-appl
 
 // 词表较大（~400KB），异步加载，不阻塞首屏；加载完成后若有文本则重新分词
 let DICT = new Set();
-import('./dict.js?v=20261112a').then((m) => {
+import('./dict.js?v=20261112b').then((m) => {
   DICT = new Set(String(m.WORDLIST || '').split(/\s+/).filter(Boolean));
   if (input.value && input.value.trim()) update();
 }).catch(() => { /* 词表缺失时退化为纯统计分词 */ });
@@ -611,7 +610,7 @@ function stamp() {
   return d.getFullYear() + p(d.getMonth() + 1) + p(d.getDate()) + '-' + p(d.getHours()) + p(d.getMinutes());
 }
 function fileBase() {
-  return collab ? ('词云高频词-房间' + collab.roomId + '-' + stamp()) : ('词云高频词-' + stamp());
+  return collab ? ('词云词表-房间' + collab.roomId + '-' + stamp()) : ('词云词表-' + stamp());
 }
 function download(filename, content, mime) {
   try {
@@ -648,8 +647,7 @@ function fallbackCopy(text) {
 
 function exportCsv() {
   if (!aggItems.length) { showToast('还没有可导出的词'); return; }
-  const rows = [['序号', '词语', '总次数', '提及人数', '提及者']];
-  aggItems.forEach((it, i) => rows.push([i + 1, it.w, it.total, it.people, it.names.join('、')]));
+  const rows = [['词语']].concat(aggItems.map((it) => [it.w]));
   const csv = '\uFEFF' + rows.map((r) => r.map(csvCell).join(',')).join('\r\n');
   if (download(fileBase() + '.csv', csv, 'text/csv;charset=utf-8')) showToast('已导出 CSV（' + aggItems.length + ' 个词）');
 }
@@ -657,34 +655,20 @@ function exportCsv() {
 /** SpreadsheetML 2003：单文件 .xls，Excel / WPS 直接打开，无需压缩库 */
 function exportXls() {
   if (!aggItems.length) { showToast('还没有可导出的词'); return; }
-  const rows = [['序号', '词语', '总次数', '提及人数', '提及者']];
-  aggItems.forEach((it, i) => rows.push([i + 1, it.w, it.total, it.people, it.names.join('、')]));
-  const body = rows.map((r, ri) => '<Row>' + r.map((c) =>
+  const body = [['词语']].concat(aggItems.map((it) => [it.w])).map((r, ri) => '<Row>' + r.map((c) =>
     '<Cell' + (ri === 0 ? ' ss:StyleID="hdr"' : '') + '><Data ss:Type="String">' + xmlEsc(c) + '</Data></Cell>'
   ).join('') + '</Row>').join('');
   const xml = '<?xml version="1.0" encoding="UTF-8"?>\n' +
     '<Workbook xmlns="urn:schemas-microsoft-com:office:spreadsheet" xmlns:ss="urn:schemas-microsoft-com:office:spreadsheet">' +
     '<Styles><Style ss:ID="hdr"><Font ss:Bold="1"/><Interior ss:Color="#EEF1FF" ss:Pattern="Solid"/></Style></Styles>' +
-    '<Worksheet ss:Name="高频词汇"><Table>' + body + '</Table></Worksheet>' +
+    '<Worksheet ss:Name="词表"><Table>' + body + '</Table></Worksheet>' +
     '</Workbook>';
   if (download(fileBase() + '.xls', xml, 'application/vnd.ms-excel;charset=utf-8')) showToast('已导出 Excel');
 }
 
-function exportDetail() {
-  if (!aggPeople.length) { showToast('还没有可导出的内容'); return; }
-  const rows = [['贡献者', '词语', '次数']];
-  aggPeople.forEach((p) => {
-    (p.full || []).forEach((t) => rows.push([p.name, t.w, t.c]));
-  });
-  const csv = '\uFEFF' + rows.map((r) => r.map(csvCell).join(',')).join('\r\n');
-  if (download(fileBase() + '-各人明细.csv', csv, 'text/csv;charset=utf-8')) showToast('已导出各人明细');
-}
-
 function copyTable() {
   if (!aggItems.length) { showToast('还没有可复制的词'); return; }
-  const lines = [['序号', '词语', '总次数', '提及人数', '提及者'].join('\t')];
-  aggItems.forEach((it, i) => lines.push([i + 1, it.w, it.total, it.people, it.names.join('、')].join('\t')));
-  copyText(lines.join('\n')).then((ok) => showToast(ok ? ('已复制 ' + aggItems.length + ' 个词') : '复制失败，请手动选择表格'));
+  copyText(aggItems.map((it) => it.w).join('\n')).then((ok) => showToast(ok ? ('已复制 ' + aggItems.length + ' 个词') : '复制失败，请手动复制词表'));
 }
 
 /* ---------------- 协作 ---------------- */
@@ -966,7 +950,6 @@ myName.addEventListener('change', () => {
 btnCopyTable.addEventListener('click', copyTable);
 btnExportCsv.addEventListener('click', exportCsv);
 btnExportXls.addEventListener('click', exportXls);
-btnExportDetail.addEventListener('click', exportDetail);
 
 canvas.addEventListener('mousemove', (e) => {
   const r = canvas.getBoundingClientRect();
