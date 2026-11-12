@@ -5,11 +5,11 @@
  * 协作模式：房间内每人一个独立输入槽位，输入互不干扰、原文互不可见；
  *           词云基于「所有槽位汇总后的词频」实时生成，并可导出高频词。
  */
-import { Collab } from './collab.js?v=20261112b';
+import { Collab } from './collab.js?v=20261112c';
 
 /* ---------------- DOM ---------------- */
 /** 构建版本号：改动前端后要同步更新（用于缓存刷新 + 页面底部显示） */
-const BUILD = '20261112b';
+const BUILD = '20261112c';
 const buildVer = document.getElementById('buildVer');
 if (buildVer) buildVer.textContent = BUILD;
 
@@ -56,7 +56,7 @@ const FONT = '"PingFang SC","Microsoft YaHei","Hiragino Sans GB",system-ui,-appl
 
 // 词表较大（~400KB），异步加载，不阻塞首屏；加载完成后若有文本则重新分词
 let DICT = new Set();
-import('./dict.js?v=20261112b').then((m) => {
+import('./dict.js?v=20261112c').then((m) => {
   DICT = new Set(String(m.WORDLIST || '').split(/\s+/).filter(Boolean));
   if (input.value && input.value.trim()) update();
 }).catch(() => { /* 词表缺失时退化为纯统计分词 */ });
@@ -668,7 +668,9 @@ function exportXls() {
 
 function copyTable() {
   if (!aggItems.length) { showToast('还没有可复制的词'); return; }
-  copyText(aggItems.map((it) => it.w).join('\n')).then((ok) => showToast(ok ? ('已复制 ' + aggItems.length + ' 个词') : '复制失败，请手动复制词表'));
+  // 与 CSV / Excel 口径一致：首行是表头「词语」，其后每行一个词
+  const text = ['词语'].concat(aggItems.map((it) => it.w)).join('\n');
+  copyText(text).then((ok) => showToast(ok ? ('已复制 ' + aggItems.length + ' 个词') : '复制失败，请手动复制词表'));
 }
 
 /* ---------------- 协作 ---------------- */
