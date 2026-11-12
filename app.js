@@ -5,9 +5,14 @@
  * 协作模式：房间内每人一个独立输入槽位，输入互不干扰、原文互不可见；
  *           词云基于「所有槽位汇总后的词频」实时生成，并可导出高频词。
  */
-import { Collab } from './collab.js';
+import { Collab } from './collab.js?v=20261112a';
 
 /* ---------------- DOM ---------------- */
+/** 构建版本号：改动前端后要同步更新（用于缓存刷新 + 页面底部显示） */
+const BUILD = '20261112a';
+const buildVer = document.getElementById('buildVer');
+if (buildVer) buildVer.textContent = BUILD;
+
 const input   = document.getElementById('input');
 const canvas  = document.getElementById('cloud');
 const box     = document.getElementById('cloudBox');
@@ -28,6 +33,7 @@ const collabStatus = document.getElementById('collabStatus');
 const roomLabel = document.getElementById('roomId');
 const btnCopy = document.getElementById('btnCopyLink');
 const btnLeave = document.getElementById('btnLeave');
+const btnDissolve = document.getElementById('btnDissolve');
 const myName = document.getElementById('myName');
 const peerList = document.getElementById('peerList');
 const sharedTag = document.getElementById('sharedTag');
@@ -51,7 +57,7 @@ const FONT = '"PingFang SC","Microsoft YaHei","Hiragino Sans GB",system-ui,-appl
 
 // 词表较大（~400KB），异步加载，不阻塞首屏；加载完成后若有文本则重新分词
 let DICT = new Set();
-import('./dict.js').then((m) => {
+import('./dict.js?v=20261112a').then((m) => {
   DICT = new Set(String(m.WORDLIST || '').split(/\s+/).filter(Boolean));
   if (input.value && input.value.trim()) update();
 }).catch(() => { /* 词表缺失时退化为纯统计分词 */ });
@@ -234,12 +240,13 @@ function extractWords(text) {
 }
 
 /* ---------------- 配色 ---------------- */
+/* 浅紫底上的词云颜色：需要足够深，保证在浅色背景上清晰可读 */
 const PALETTES = {
-  neon:  ['#6ee7ff','#a78bfa','#f472b6','#4ade80','#facc15','#fb923c','#38bdf8','#e879f9'],
-  warm:  ['#fb923c','#f43f5e','#f59e0b','#ef4444','#eab308','#fbbf24','#f97316','#dc2626'],
-  cool:  ['#38bdf8','#22d3ee','#818cf8','#2dd4bf','#60a5fa','#a78bfa','#0ea5e9','#14b8a6'],
-  mono:  ['#e6e8f0','#b9bed6','#9499b8','#d5d8e6','#8a90ad','#c7cadb','#a6abc6','#dde0ee'],
-  random:['#ff6b6b','#ffd93d','#6bcB77','#4d96ff','#c77dff','#ff9f43','#00d2d3','#f368e0']
+  neon:  ['#7c3aed','#db2777','#0e7490','#ea580c','#a16207','#16a34a','#2563eb','#9333ea'],
+  warm:  ['#ea580c','#e11d48','#b45309','#dc2626','#a16207','#d97706','#c2410c','#be123c'],
+  cool:  ['#0369a1','#0e7490','#4338ca','#0f766e','#1d4ed8','#7c3aed','#0284c7','#115e59'],
+  mono:  ['#3f3d5c','#55537a','#6b6895','#4a4869','#7d7aa6','#5f5d86','#8a88b0','#38365a'],
+  random:['#e11d48','#a16207','#16a34a','#2563eb','#9333ea','#ea580c','#0e7490','#c026d3']
 };
 function pickColor(i) {
   const p = PALETTES[selPal.value] || PALETTES.neon;
@@ -744,6 +751,7 @@ function enterRoom(roomId, viaLink) {
     name: myName.value,
     ownId: myClientId,
     onState: (st) => {
+      if (!collab) return;            // 房间已解散 → 忽略后续状态
       const mine = st.parts.find((p) => p.id === st.ownId);
       const myText = mine ? mine.text : '';
       // 认领到自己的槽位后，若房间里的内容是空的而本机有草稿 → 用草稿补回
@@ -792,6 +800,15 @@ function enterRoom(roomId, viaLink) {
       cnt.textContent = onlineIds.size + ' 人在线';
       peerList.appendChild(cnt);
       renderRoster();
+    },
+    onClosed: (info) => {
+      // 房间被解散（有人点了「解散房间」，或最后一人退出后自动清理）
+      const reason = (info && info.reason) || '';
+      let msg;
+      if (reason === 'manual') msg = '房间已解散，服务器上的内容已清空';
+      else if (reason === 'auto-empty') msg = '房间已空，服务器上的副本已自动清理';
+      else msg = '房间已被 ' + ((info && info.by) ? info.by : '有人') + ' 解散，内容已清空';
+      exitToSolo(msg);
     }
   });
   collab.start();
@@ -800,12 +817,70 @@ function enterRoom(roomId, viaLink) {
   if (viaLink) showToast('已进入房间 ' + roomId + '，写下你的重点词吧');
 }
 
-function leaveRoom() {
+/** 解散前把房间里的内容备份到本机，避免解散后什么都看不到 */
+function backupRoom(roomId) {
+  try {
+    if (!collab) return;
+    const names = collab.getNames();
+    const parts = collab.getParts().map((p) => ({
+      id: p.id, name: names[p.id] || '匿名', text: p.text || ''
+    }));
+    localStorage.setItem('wc-backup-' + roomId, JSON.stringify({ ts: Date.now(), parts: parts }));
+  } catch (e) { /* ignore */ }
+}
+
+/** 把当前输入存进单人模式的草稿（切回单人 / 退出房间时调用，文字不会丢） */
+function saveSoloDraft(text) {
+  try {
+    const t = (text === undefined) ? (input.value || '') : (text || '');
+    localStorage.setItem('wc-draft-solo', JSON.stringify({ text: t, ts: Date.now() }));
+  } catch (e) { /* ignore */ }
+}
+
+/** 切回单人模式（房间解散 / 退出房间后） */
+function exitToSolo(msg) {
+  // 先把内容记下来：销毁协作对象时 Y.Doc 会把槽位清空，输入框可能跟着变空
+  const keep = input.value || '';
+  const c = collab;
+  collab = null;
+  if (c) { try { c.destroy(); } catch (e) { /* ignore */ } }
+  collabPanel.hidden = true;
+  sharedTag.hidden = true;
+  btnCollab.textContent = '开启协作';
+  btnCollab.classList.remove('active');
+  inputLabel.textContent = '我的文本';
+  inputHint.textContent = '输入即实时生成词云';
+  input.placeholder = '在这里粘贴或输入文字，词云会实时生成…';
+  // 房间没了，地址里的房间号也要去掉（否则刷新会误进一个已解散的空房间）
+  try { history.replaceState(null, '', location.pathname + location.search); } catch (e) { /* ignore */ }
+  onlineIds = new Set();
+  draftKey = 'wc-draft-solo';
+  input.value = keep;      // 内容保住
+  saveSoloDraft(keep);     // 草稿 key 换了（房间草稿 → 单人草稿），内容不能丢
+  submittedText = keep;
+  submittedAt = Date.now();
+  renderSubmitStatus();
+  update();
+  if (msg) showToast(msg);
+}
+
+async function leaveRoom() {
   // 退出前把内容定稿一次，避免最后一笔没落进快照
-  if (collab && input.value !== submittedText) {
+  const keep = input.value || '';
+  if (collab && keep !== submittedText) {
     submitNow(true);
     showToast('退出前已自动提交');
   }
+  if (collab) {
+    setStatus('warn', '正在退出…');
+    btnLeave.disabled = true;
+    try {
+      // 房间里没人应答 → 说明只剩我一个，顺手把服务器上的房间副本清掉
+      const empty = await collab.leave();
+      if (empty) showToast('已退出房间，服务器上的房间副本已清理');
+    } catch (e) { /* ignore */ }
+  }
+  saveSoloDraft(keep);   // 退出后回到单人模式，文字仍然在
   location.hash = '';
   location.reload();
 }
@@ -854,6 +929,33 @@ btnCopy.addEventListener('click', () => {
   copyText(link).then((ok) => showToast(ok ? '邀请链接已复制' : '复制失败：' + link));
 });
 btnLeave.addEventListener('click', leaveRoom);
+
+/* 解散房间：页面内二次确认。
+   不用原生 confirm() —— 它是阻塞式弹窗，在部分嵌入环境里会把页面卡死。 */
+let dissolveArmed = false;
+let dissolveTimer = null;
+function disarmDissolve() {
+  dissolveArmed = false;
+  clearTimeout(dissolveTimer);
+  btnDissolve.textContent = '解散房间';
+  btnDissolve.classList.remove('armed');
+}
+btnDissolve.addEventListener('click', () => {
+  if (!collab) return;
+  if (!dissolveArmed) {
+    dissolveArmed = true;
+    btnDissolve.textContent = '再点一次确认解散';
+    btnDissolve.classList.add('armed');
+    clearTimeout(dissolveTimer);
+    dissolveTimer = setTimeout(disarmDissolve, 8000);
+    showToast('再点一次「解散房间」才会真的解散');
+    return;
+  }
+  disarmDissolve();
+  const room = collab.roomId;
+  backupRoom(room);
+  collab.dissolve('manual');   // 解散后的界面切换由 onClosed 统一处理
+});
 myName.addEventListener('change', () => {
   const v = (myName.value || '').trim().slice(0, 12) || randomName();
   myName.value = v;

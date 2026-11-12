@@ -3,20 +3,20 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
-<meta name="theme-color" content="#0e1020" />
+<meta name="theme-color" content="#f4f0ff" />
 <title>实时词云 · Live Word Cloud</title>
 <style>
   :root{
-    --bg:#0b0d1a;
-    --card:rgba(255,255,255,.055);
-    --line:rgba(255,255,255,.12);
-    --txt:#eef1ff;
-    --dim:#a3a8c8;
-    --accent:#6ee7ff;
-    --accent2:#a78bfa;
-    --ok:#4ade80;
-    --bad:#fb7185;
-    --warn:#fbbf24;
+    --bg:#f4f0ff;
+    --card:rgba(255,255,255,.78);
+    --line:rgba(88,64,158,.16);
+    --txt:#2e2450;
+    --dim:#6b5f92;
+    --accent:#6d3fe0;
+    --accent2:#a855f7;
+    --ok:#15803d;
+    --bad:#e11d48;
+    --warn:#b45309;
   }
   *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
   html,body{height:100%}
@@ -25,8 +25,8 @@
     color:var(--txt);
     font-family:"PingFang SC","Microsoft YaHei","Hiragino Sans GB","Helvetica Neue",Arial,sans-serif;
     background:
-      radial-gradient(1100px 700px at 12% -10%, #2b2170 0%, transparent 60%),
-      radial-gradient(900px 600px at 95% 0%, #0d4a63 0%, transparent 55%),
+      radial-gradient(1100px 700px at 12% -10%, #e7dcff 0%, transparent 60%),
+      radial-gradient(900px 600px at 95% 0%, #dfe6ff 0%, transparent 55%),
       var(--bg);
     min-height:100%;
     display:flex;
@@ -39,7 +39,7 @@
   .logo{
     width:44px;height:44px;border-radius:14px;flex:none;
     background:linear-gradient(135deg,var(--accent),var(--accent2));
-    box-shadow:0 10px 26px rgba(110,231,255,.28);
+    box-shadow:0 10px 26px rgba(109,63,224,.22);
     display:grid;place-items:center;font-size:22px;
   }
   h1{font-size:19px;margin:0;letter-spacing:.5px}
@@ -63,28 +63,36 @@
   .input-hint{font-size:12px;color:var(--dim)}
   textarea{
     width:100%;min-height:132px;resize:vertical;
-    background:rgba(0,0,0,.28);border:1px solid var(--line);border-radius:14px;
+    background:rgba(255,255,255,.92);border:1px solid var(--line);border-radius:14px;
     color:var(--txt);font-size:15px;line-height:1.65;padding:13px 14px;
     outline:none;font-family:inherit;transition:border-color .2s, box-shadow .2s;
   }
-  textarea:focus{border-color:rgba(110,231,255,.65);box-shadow:0 0 0 3px rgba(110,231,255,.14)}
-  textarea::placeholder{color:#6f749b}
+  textarea:focus{border-color:rgba(109,63,224,.6);box-shadow:0 0 0 3px rgba(109,63,224,.14)}
+  textarea::placeholder{color:#9a90b8}
 
   .bar{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-top:11px}
   button{
     font-family:inherit;font-size:14px;cursor:pointer;border-radius:12px;
-    border:1px solid var(--line);background:rgba(255,255,255,.06);color:var(--txt);
+    border:1px solid var(--line);background:rgba(255,255,255,.82);color:var(--txt);
     padding:10px 16px;transition:transform .12s, background .2s, border-color .2s;
   }
-  button:hover{background:rgba(255,255,255,.12)}
+  button:hover{background:#fff;border-color:rgba(109,63,224,.4)}
   button:active{transform:scale(.97)}
   button.primary{
     background:linear-gradient(135deg,var(--accent),var(--accent2));
-    border:none;color:#0a0c1c;font-weight:700;
-    box-shadow:0 8px 22px rgba(110,231,255,.25);
+    border:none;color:#fff;font-weight:700;
+    box-shadow:0 8px 22px rgba(109,63,224,.25);
   }
   button.active{
-    background:rgba(110,231,255,.16);border-color:rgba(110,231,255,.5);color:var(--accent);
+    background:rgba(109,63,224,.12);border-color:rgba(109,63,224,.45);color:var(--accent);
+  }
+  button.danger{
+    background:rgba(225,29,72,.07);border-color:rgba(225,29,72,.38);color:var(--bad);
+  }
+  button.danger:hover{background:rgba(225,29,72,.14);border-color:rgba(225,29,72,.6)}
+  button.danger.armed{
+    background:var(--bad);border-color:var(--bad);color:#fff;font-weight:700;
+    box-shadow:0 6px 18px rgba(225,29,72,.3);
   }
   button.mini{font-size:12.5px;padding:7px 12px;border-radius:10px}
   .spacer{flex:1}
@@ -93,43 +101,43 @@
 
   /* ---- 提交板块 ---- */
   .submit-box{
-    margin-top:12px;border:1px dashed rgba(110,231,255,.32);border-radius:14px;
-    padding:10px 12px;background:rgba(110,231,255,.05);
+    margin-top:12px;border:1px dashed rgba(109,63,224,.34);border-radius:14px;
+    padding:10px 12px;background:rgba(109,63,224,.055);
     display:flex;flex-direction:column;gap:7px;
   }
   .submit-row{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
   .submit-btn{
     font-size:13.5px;padding:9px 20px;border-radius:11px;font-weight:700;
-    background:linear-gradient(135deg,#6ee7ff,#a78bfa);border:none;color:#0a0c1c;
-    box-shadow:0 6px 18px rgba(110,231,255,.22);
+    background:linear-gradient(135deg,var(--accent),var(--accent2));border:none;color:#fff;
+    box-shadow:0 6px 18px rgba(109,63,224,.22);
   }
-  .submit-btn:hover{filter:brightness(1.08)}
+  .submit-btn:hover{filter:brightness(1.06)}
   .submit-btn:active{transform:scale(.97)}
   .submit-status{font-size:12.5px;color:var(--dim)}
   .submit-status.ok{color:var(--ok)}
   .submit-status.warn{color:var(--warn)}
-  .submit-hint{font-size:11.5px;color:#7d82a8;line-height:1.65}
+  .submit-hint{font-size:11.5px;color:#8378a8;line-height:1.65}
 
   select{
-    font-family:inherit;font-size:13px;color:var(--txt);background:rgba(0,0,0,.3);
+    font-family:inherit;font-size:13px;color:var(--txt);background:#fff;
     border:1px solid var(--line);border-radius:10px;padding:8px 10px;outline:none;cursor:pointer;
   }
   input[type=range]{width:104px;accent-color:var(--accent)}
   input[type=text]{
-    font-family:inherit;font-size:13px;color:var(--txt);background:rgba(0,0,0,.3);
+    font-family:inherit;font-size:13px;color:var(--txt);background:#fff;
     border:1px solid var(--line);border-radius:10px;padding:7px 10px;outline:none;width:120px;
   }
-  input[type=text]:focus{border-color:rgba(110,231,255,.55)}
+  input[type=text]:focus{border-color:rgba(109,63,224,.55)}
 
   .stats{
     display:flex;gap:8px;flex-wrap:wrap;margin:13px 2px 10px;font-size:12.5px;color:var(--dim);
   }
-  .chip{border:1px solid var(--line);border-radius:999px;padding:5px 11px;background:rgba(255,255,255,.04)}
+  .chip{border:1px solid var(--line);border-radius:999px;padding:5px 11px;background:rgba(255,255,255,.72)}
   .chip b{color:var(--txt);font-weight:600}
 
   /* ---- 协作面板 ---- */
   .collab{
-    background:rgba(110,231,255,.07);border:1px solid rgba(110,231,255,.28);
+    background:rgba(109,63,224,.055);border:1px solid rgba(109,63,224,.22);
     border-radius:16px;padding:12px 14px;margin:0 0 12px;
     display:flex;flex-direction:column;gap:10px;
   }
@@ -141,14 +149,14 @@
   .peers{display:flex;gap:6px;flex-wrap:wrap;align-items:center}
   .peer{
     font-size:12px;border:1px solid var(--line);border-radius:999px;padding:4px 10px;
-    background:rgba(255,255,255,.05);color:var(--txt);
+    background:#fff;color:var(--txt);
   }
-  .peer.me{border-color:rgba(110,231,255,.45);color:var(--accent)}
+  .peer.me{border-color:rgba(109,63,224,.45);color:var(--accent)}
   .peer.count{color:var(--dim);border-style:dashed}
   .tag{
     display:inline-flex;align-items:center;gap:5px;font-size:11.5px;
-    border:1px solid rgba(167,139,250,.45);color:#c4b5fd;
-    border-radius:999px;padding:4px 10px;background:rgba(167,139,250,.12);
+    border:1px solid rgba(168,85,247,.35);color:#7c3aed;
+    border-radius:999px;padding:4px 10px;background:rgba(168,85,247,.10);
   }
   .tag[hidden]{display:none}
 
@@ -157,30 +165,30 @@
   .roster{
     display:grid;grid-template-columns:repeat(auto-fill,minmax(178px,1fr));gap:8px;
   }
-  .roster-empty{font-size:12.5px;color:#6f749b;padding:6px 2px}
+  .roster-empty{font-size:12.5px;color:#8b81ad;padding:6px 2px}
   .rcard{
     border:1px solid var(--line);border-radius:12px;padding:9px 11px;
-    background:rgba(255,255,255,.04);font-size:12.5px;min-width:0;
+    background:rgba(255,255,255,.82);font-size:12.5px;min-width:0;
   }
   .rc-top{display:flex;align-items:center;gap:7px;margin-bottom:4px;min-width:0}
   .rc-name{font-weight:600;font-size:13px;color:var(--txt);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
   .rc-name.rc-me{color:var(--accent)}
   .rc-sub{
-    font-size:10.5px;border:1px solid rgba(74,222,128,.45);color:var(--ok);
-    border-radius:999px;padding:1px 7px;background:rgba(74,222,128,.12);
+    font-size:10.5px;border:1px solid rgba(21,128,61,.38);color:var(--ok);
+    border-radius:999px;padding:1px 7px;background:rgba(21,128,61,.10);
   }
   .rc-meta{color:var(--dim);font-size:11.5px}
   .rc-words{margin-top:7px;display:flex;flex-wrap:wrap;gap:4px}
   .wchip{
-    font-size:11px;border:1px solid rgba(167,139,250,.32);color:#c4b5fd;
-    border-radius:999px;padding:2px 8px;background:rgba(167,139,250,.10);
+    font-size:11px;border:1px solid rgba(109,63,224,.25);color:#6d28d9;
+    border-radius:999px;padding:2px 8px;background:rgba(109,63,224,.08);
     max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
   }
 
   .cloud-box{
     position:relative;flex:1;min-height:340px;border-radius:18px;
     border:1px solid var(--line);overflow:hidden;
-    background:radial-gradient(700px 420px at 50% 42%, rgba(110,231,255,.10), rgba(255,255,255,.02) 60%, transparent 100%);
+    background:radial-gradient(700px 420px at 50% 40%, #fdfbff 0%, #f7f2ff 55%, #f0e8ff 100%);
   }
   canvas{display:block;width:100%;height:100%;position:absolute;inset:0}
   .empty{
@@ -190,24 +198,25 @@
   .empty.hide{display:none}
   .tip{
     position:absolute;pointer-events:none;transform:translate(-50%,-140%);
-    background:rgba(10,12,28,.94);border:1px solid var(--line);border-radius:10px;
+    background:#fff;border:1px solid var(--line);border-radius:10px;color:var(--txt);
     padding:6px 10px;font-size:13px;white-space:nowrap;opacity:0;transition:opacity .12s;
-    box-shadow:0 8px 20px rgba(0,0,0,.45);
+    box-shadow:0 8px 20px rgba(76,48,140,.18);
   }
   .tip.show{opacity:1}
   .hint{
-    position:absolute;right:12px;bottom:10px;font-size:11.5px;color:#6f749b;
-    background:rgba(0,0,0,.28);padding:4px 9px;border-radius:8px;
+    position:absolute;right:12px;bottom:10px;font-size:11.5px;color:#8b81ad;
+    background:rgba(255,255,255,.8);padding:4px 9px;border-radius:8px;
   }
   .toast{
     position:fixed;left:50%;bottom:26px;transform:translate(-50%,14px);
-    background:rgba(12,14,32,.96);border:1px solid var(--line);color:var(--txt);
+    background:rgba(46,36,80,.95);border:1px solid rgba(46,36,80,.35);color:#fff;
     padding:10px 18px;border-radius:12px;font-size:13.5px;opacity:0;
     pointer-events:none;transition:opacity .2s, transform .2s;z-index:50;
-    box-shadow:0 10px 30px rgba(0,0,0,.5);
+    box-shadow:0 10px 30px rgba(76,48,140,.28);
   }
   .toast.show{opacity:1;transform:translate(-50%,0)}
-  footer{margin-top:14px;text-align:center;font-size:12px;color:#6f749b}
+  footer{margin-top:14px;text-align:center;font-size:12px;color:#8b81ad}
+  .ver{opacity:.6;font-size:11px;margin-left:4px}
 
   /* ---- 高频词汇榜 ---- */
   .table-panel{margin-top:12px}
@@ -216,13 +225,13 @@
   .table-title span{font-weight:400;color:var(--dim);font-size:12px;margin-left:6px}
   .table-wrap{
     max-height:268px;overflow:auto;margin-top:10px;
-    border:1px solid var(--line);border-radius:12px;background:rgba(0,0,0,.2);
+    border:1px solid var(--line);border-radius:12px;background:rgba(255,255,255,.62);
   }
   table{width:100%;border-collapse:collapse;font-size:13px;min-width:440px}
-  th,td{padding:8px 12px;text-align:left;border-bottom:1px solid rgba(255,255,255,.06);white-space:nowrap}
+  th,td{padding:8px 12px;text-align:left;border-bottom:1px solid rgba(88,64,158,.10);white-space:nowrap}
   th{
-    position:sticky;top:0;z-index:1;font-weight:500;font-size:12px;color:var(--dim);
-    background:#151830;
+    position:sticky;top:0;z-index:1;font-weight:500;font-size:12px;color:#5a4d86;
+    background:#eee8fd;
   }
   td.n{color:var(--dim);width:46px}
   td.w{color:var(--txt);font-weight:600}
@@ -304,6 +313,7 @@
       <span class="room">房间 <b id="roomId">—</b></span>
       <button class="mini" id="btnCopyLink">复制邀请链接</button>
       <button class="mini" id="btnLeave">退出房间</button>
+      <button class="mini danger" id="btnDissolve">解散房间</button>
     </div>
     <div class="collab-row">
       <label class="collab-label">我的昵称
@@ -317,6 +327,7 @@
       <span class="collab-label" style="opacity:.75">每人独享输入框，词频汇入下方词云</span>
     </div>
     <div class="roster" id="roster"></div>
+    <div class="submit-hint">最后一人退出房间时，服务器上这个房间的副本会被自动清理（释放内存）；也可以随时点「解散房间」立即清理。</div>
   </section>
 
   <div class="stats">
@@ -352,11 +363,11 @@
     </div>
   </section>
 
-  <footer>所有分词与渲染均在你的浏览器本地完成，内容不会上传服务器</footer>
+  <footer>所有分词与渲染均在你的浏览器本地完成，内容不会上传服务器 <span id="buildVer" class="ver"></span></footer>
 </div>
 
 <div class="toast" id="toast"></div>
 
-<script type="module" src="app.js"></script>
+<script type="module" src="app.js?v=20261112a"></script>
 </body>
 </html>
